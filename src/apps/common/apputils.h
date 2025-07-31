@@ -228,6 +228,8 @@ struct event_base *turn_event_base_new(void);
 
 void turn_srandom(void);
 long turn_random(void);
+long get_random_count(void);
+uint32_t get_seed(void);
 
 ///////////////////////////////////////////////////////
 

@@ -3289,14 +3289,19 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
       if (TURN_RANDOM_SIZE == 8) {
         for (i = 0; i < (NONCE_LENGTH_32BITS >> 1); i++) {
           uint8_t *s = ss->nonce + 8 * i;
-          uint64_t rand = (uint64_t)turn_random();
+          long r1 = turn_random();
+          uint64_t rand = (uint64_t)r1;
+          unsigned long r2 = (unsigned long)rand;
           snprintf((char *)s, NONCE_MAX_SIZE - 8 * i, "%08lx", (unsigned long)rand);
+          printf("rnd_cnt: %d, seed: %08lx, rand: %d \n", get_random_count(), get_seed() ,rand);
         }
+        printf("nonce: %s\n", ss->nonce);
       } else {
         for (i = 0; i < NONCE_LENGTH_32BITS; i++) {
           uint8_t *s = ss->nonce + 4 * i;
           uint32_t rand = (uint32_t)turn_random();
           snprintf((char *)s, NONCE_MAX_SIZE - 4 * i, "%04x", (unsigned int)rand);
+          printf("rnd_cnt: %d, seed: %04x, rand: %04x\n",  get_random_count(), get_seed() , (unsigned int)rand);
         }
       }
       ss->nonce_expiration_time = server->ctime + *(server->stale_nonce);

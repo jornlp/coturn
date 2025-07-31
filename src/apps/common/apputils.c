@@ -1193,31 +1193,51 @@ void ignore_sigpipe(void) {
 
 static uint64_t turn_getRandTime(void) {
   struct timespec tp = {0, 0};
+
 #if defined(CLOCK_REALTIME)
   clock_gettime(CLOCK_REALTIME, &tp);
+  printf("nsec: %d\n", (uint64_t)tp.tv_nsec);
 #else
   tp.tv_sec = time(NULL);
 #endif
   uint64_t current_time = (uint64_t)(tp.tv_sec);
   uint64_t current_mstime = (uint64_t)(current_time + (tp.tv_nsec));
-
   return current_mstime;
 }
+
+static uint32_t seed = 0;
+static long random_count =0;
 
 void turn_srandom(void) {
 #if defined(WINDOWS)
   srand((unsigned int)(turn_getRandTime() + (unsigned int)((long)(&turn_getRandTime))));
 #else
-  srandom((unsigned int)(turn_getRandTime() + (unsigned int)((long)(&turn_getRandTime))));
+  seed = (unsigned long)(turn_getRandTime() + (unsigned long)((long)(&turn_getRandTime)));
+  seed = 0x34b1a12e;
+  printf("seed: %lu\n", seed);
+  srandom(seed);
+  random_count = 0;
 #endif
 }
-
 long turn_random(void) {
 #if defined(WINDOWS)
   return rand();
 #else
-  return random();
+  long r = random();
+  if (r < 0) {
+    printf("random() returned negative value: %ld\n", r);
+  }
+  // printf("random: %ld\n", r);
+  // return r;
+  random_count++;
+  return r;
 #endif
+}
+long get_random_count(void) {
+  return random_count;
+}
+uint32_t get_seed(void) {
+  return seed;
 }
 
 unsigned long set_system_parameters(int max_resources) {

@@ -89,6 +89,8 @@ static int is_taken(uint32_t status) {
 }
 
 static void turnports_randomize(turnports *tp) {
+  //print rnd count
+  printf("Rnd_cnt %d\n", get_random_count());
   if (tp) {
     unsigned int size = (unsigned int)(tp->high - tp->low);
     unsigned int i = 0;
@@ -108,6 +110,24 @@ static void turnports_randomize(turnports *tp) {
       }
     }
   }
+  printf("randomizing %d ports\n", (unsigned int)(tp->high - tp->low));
+  //print first 10 ports
+  for (unsigned int i = 0; i < 10 && i < PORTS_SIZE; i++) {
+    uint16_t pos = tp->low + i;
+    uint16_t port = tp->ports[pos];
+    if (tp->status[port] == TPS_OUT_OF_RANGE) {
+      continue;
+    }
+    printf("port pos %u: status %u, port %u\n", pos, tp->status[port], port);
+  }
+  //DEBUG
+  // for (unsigned int i = 0; i < PORTS_SIZE; i++) {
+  //   if (tp->status[i] == TPS_OUT_OF_RANGE) {
+  //     continue;
+  //   }
+  //   printf("port %u: status %u, port %u\n", i, tp->status[i], tp->ports[i]);
+  // }
+  // exit(0);
 }
 
 static void turnports_init(turnports *tp, uint16_t start, uint16_t end) {
