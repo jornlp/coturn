@@ -37,6 +37,7 @@
 
 #include "prom_server.h"
 #include <assert.h>
+#include <limits.h>
 
 #if defined(WINDOWS)
 #include <iphlpapi.h>
@@ -225,6 +226,7 @@ turn_params_t turn_params = {
 
     ///////////// CPUs //////////////////
     DEFAULT_CPUS_NUMBER,
+    false, /* cpus_configured */
 
     ///////// Encryption /////////
     "",                                     /* secret_key_file */
@@ -1024,6 +1026,11 @@ static char Usage[] =
     "						In older systems (pre-Linux 3.9) the number of UDP relay threads "
     "always equals\n"
     "						the number of listening endpoints (unless -m 0 is set).\n"
+    " --cpus				<number>	Override system CPU count detection. Use this number\n"
+    "						instead of the auto-detected CPU count.\n"
+    "						Useful in virtualized/containerized environments where\n"
+    "						the system reports the host CPU count instead of\n"
+    "						the allocated container CPUs.\n"
     " --min-port			<port>		Lower bound of the UDP port range for relay endpoints "
     "allocation.\n"
     "						Default value is 49152, according to RFC 5766.\n"
@@ -1506,7 +1513,8 @@ enum EXTRA_OPTS {
   STUN_BACKWARD_COMPATIBILITY_OPT,
   RESPONSE_ORIGIN_ONLY_WITH_RFC5780_OPT,
   RESPOND_HTTP_UNSUPPORTED_OPT,
-  VERSION_OPT
+  VERSION_OPT,
+  CPUS_OPT
 };
 
 struct myoption {
@@ -1652,6 +1660,7 @@ static const struct myoption long_options[] = {
     {"respond-http-unsupported", optional_argument, NULL, RESPOND_HTTP_UNSUPPORTED_OPT},
     {"version", optional_argument, NULL, VERSION_OPT},
     {"syslog-facility", required_argument, NULL, SYSLOG_FACILITY_OPT},
+    {"cpus", required_argument, NULL, CPUS_OPT},
     {NULL, no_argument, NULL, 0}};
 
 static const struct myoption admin_long_options[] = {
@@ -1753,29 +1762,26 @@ void encrypt_aes_128(unsigned char *in, const unsigned char *mykey) {
   printf("%s\n", base64_encoded);
 }
 static void generate_aes_128_key(char *filePath, unsigned char *returnedKey) {
-  char key[16];
+  unsigned char key[16];
 
   // TODO: Document why this is called...?
   turn_srandom();
 
+// generate two 64-bit random values
+#if LONG_MAX > 0xffffffff
+  uint64_t random_value_0 = (uint64_t)turn_random();
+  uint64_t random_value_1 = (uint64_t)turn_random();
+#else
+  uint64_t random_value_0 = (((uint64_t)turn_random()) << 32) | (uint64_t)turn_random();
+  uint64_t random_value_1 = (((uint64_t)turn_random()) << 32) | (uint64_t)turn_random();
+#endif
+
   for (size_t i = 0; i < 16; ++i) {
-    // TODO: This could be sped up by breaking the
-    // returned random value into multiple 8bit values
-    // instead of getting a new multi-byte random value
-    // for each key index.
-    switch (turn_random() % 3) {
-    case 0:
-      key[i] = (turn_random() % 10) + 48;
-      continue;
-    case 1:
-      key[i] = (turn_random() % 26) + 65;
-      continue;
-    default:
-      key[i] = (turn_random() % 26) + 97;
-      continue;
-    }
+    // store the 128 random bits in the key array
+    key[i] = (i < 8) ? (random_value_0 >> (i * 8)) & 0xff : (random_value_1 >> ((i - 8) * 8)) & 0xff;
   }
-  FILE *fptr = fopen(filePath, "w");
+
+  FILE *fptr = fopen(filePath, "wb");
   if (!fptr) {
     return;
   }
@@ -2367,6 +2373,20 @@ static void set_option(int c, char *value) {
   case RESPOND_HTTP_UNSUPPORTED_OPT:
     turn_params.respond_http_unsupported = get_bool_value(value);
     break;
+  case CPUS_OPT: {
+    int cpus = atoi(value);
+    if (cpus < 1) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "ERROR: cpus value must be positive\n");
+    } else if (cpus > MAX_NUMBER_OF_GENERAL_RELAY_SERVERS) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_WARNING, "WARNING: max number of cpus is %d.\n",
+                    MAX_NUMBER_OF_GENERAL_RELAY_SERVERS);
+      turn_params.cpus = MAX_NUMBER_OF_GENERAL_RELAY_SERVERS;
+      turn_params.cpus_configured = true;
+    } else {
+      turn_params.cpus = (unsigned long)cpus;
+      turn_params.cpus_configured = true;
+    }
+  } break;
 
   /* these options have been already taken care of before: */
   case 'l':
@@ -2968,21 +2988,8 @@ int main(int argc, char **argv) {
 
   init_super_memory();
 
-  init_domain();
-  create_default_realm();
-
-  init_turn_server_addrs_list(&turn_params.alternate_servers_list);
-  init_turn_server_addrs_list(&turn_params.tls_alternate_servers_list);
-  init_turn_server_addrs_list(&turn_params.aux_servers_list);
-
-  set_network_engine();
-
-  init_listener();
-  init_secrets_list(&turn_params.default_users_db.ram_db.static_auth_secrets);
-  init_dynamic_ip_lists();
-
+  // Read the log options first because some initialization can generate logs
   if (!strstr(argv[0], "turnadmin")) {
-
     struct uoptions uo;
     uo.u.m = long_options;
 
@@ -3016,6 +3023,19 @@ int main(int argc, char **argv) {
 
   optind = 0;
 
+  init_domain();
+  create_default_realm();
+
+  init_turn_server_addrs_list(&turn_params.alternate_servers_list);
+  init_turn_server_addrs_list(&turn_params.tls_alternate_servers_list);
+  init_turn_server_addrs_list(&turn_params.aux_servers_list);
+
+  set_network_engine();
+
+  init_listener();
+  init_secrets_list(&turn_params.default_users_db.ram_db.static_auth_secrets);
+  init_dynamic_ip_lists();
+
 #if !TLS_SUPPORTED
   turn_params.no_tls = 1;
 #endif
@@ -3034,23 +3054,6 @@ int main(int argc, char **argv) {
   // Zero pass apply the log options.
   read_config_file(argc, argv, 0);
 
-  {
-    unsigned long cpus = get_system_active_number_of_cpus();
-    if (cpus > 0) {
-      turn_params.cpus = cpus;
-    }
-    if (turn_params.cpus < DEFAULT_CPUS_NUMBER) {
-      turn_params.cpus = DEFAULT_CPUS_NUMBER;
-    } else if (turn_params.cpus > MAX_NUMBER_OF_GENERAL_RELAY_SERVERS) {
-      turn_params.cpus = MAX_NUMBER_OF_GENERAL_RELAY_SERVERS;
-    }
-
-    turn_params.general_relay_servers_number = (turnserver_id)turn_params.cpus;
-
-    TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "System cpu num is %lu\n", get_system_number_of_cpus());
-    TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "System enable num is %lu\n", get_system_active_number_of_cpus());
-  }
-
   // First pass read other config options
   read_config_file(argc, argv, 1);
 
@@ -3062,6 +3065,25 @@ int main(int argc, char **argv) {
       set_option(c, optarg);
     }
   }
+
+  // CPU detection and configuration
+  if (!turn_params.cpus_configured) {
+    unsigned long cpus = get_system_active_number_of_cpus();
+    if (cpus > 0) {
+      turn_params.cpus = cpus;
+    }
+  }
+  if (turn_params.cpus < DEFAULT_CPUS_NUMBER) {
+    turn_params.cpus = DEFAULT_CPUS_NUMBER;
+  } else if (turn_params.cpus > MAX_NUMBER_OF_GENERAL_RELAY_SERVERS) {
+    turn_params.cpus = MAX_NUMBER_OF_GENERAL_RELAY_SERVERS;
+  }
+
+  turn_params.general_relay_servers_number = (turnserver_id)turn_params.cpus;
+
+  TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "System cpu num is %lu\n", get_system_number_of_cpus());
+  TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "System enable num is %lu\n", get_system_active_number_of_cpus());
+  TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "Configured cpu num is %lu\n", turn_params.cpus);
 
   // Second pass read -u options
   read_config_file(argc, argv, 2);
